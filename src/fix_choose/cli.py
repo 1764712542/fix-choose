@@ -105,7 +105,7 @@ def analyze(target, model, api_key, api_url, diff):
     chosen = interactive_loop(schemes, console)
 
     if chosen is None:
-        console.print("\n[yellow]已尝试所有方案，均已拒绝。请补充更多信息后重试。[/yellow]")
+        console.print("\n[yellow]🚫 没有选中的方案。再来一次？[/yellow]")
         sys.exit(0)
 
     # 执行
@@ -168,7 +168,7 @@ def pick(scheme_a, scheme_b, scheme_c, json_output, extra_schemes):
             import json as _json
             print(_json.dumps({"selected": None, "reason": "all_rejected"}, ensure_ascii=False))
         else:
-            console.print("\n[yellow]已尝试所有方案，均已拒绝。[/yellow]")
+            console.print("\n[yellow]🚫 没有选中的方案。再来一次？[/yellow]")
         sys.exit(0)
 
     if json_output:

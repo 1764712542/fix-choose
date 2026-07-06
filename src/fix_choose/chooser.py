@@ -1,4 +1,4 @@
-"""交互式方案选择器 — 带 Yes/No 按钮的循环选择"""
+"""交互式方案选择器 — 多选按钮：方案A/B/C + 自定义输入"""
 
 from dataclasses import dataclass, field
 from typing import Optional, List
@@ -20,104 +20,135 @@ class Scheme:
     details: List[str] = field(default_factory=list)  # 具体改动步骤
 
 
-def _render_scheme_card(scheme: Scheme, index: int, total: int) -> None:
-    """渲染方案卡片"""
-    console = Console()
+def _risk_icon(risk: str) -> str:
+    return {"低": "🟢", "中": "🟡", "高": "🔴"}.get(risk, "⚪")
 
-    # 风险颜色
-    risk_color = {
-        "低": "green",
-        "中": "yellow",
-        "高": "red",
-    }.get(scheme.risk, "white")
 
-    scope_color = {
-        "小": "green",
-        "中": "yellow",
-        "大": "red",
-    }.get(scheme.scope, "white")
+def _scope_icon(scope: str) -> str:
+    return {"小": "📏", "中": "📐", "大": "🏗️"}.get(scope, "📋")
 
-    # 方案信息
-    info = (
-        f"[bold cyan]方案 {scheme.name}[/bold cyan]\n\n"
-        f"[white]{scheme.description}[/white]\n\n"
-        f"[{risk_color}]📊 风险等级：[bold]{scheme.risk}[/bold][/{risk_color}]      "
-        f"[{scope_color}]📏 改动范围：[bold]{scheme.scope}[/bold][/{scope_color}]"
-    )
 
-    # 如果有具体步骤
-    if scheme.details:
-        steps = "\n".join(f"  {i+1}. {step}" for i, step in enumerate(scheme.details))
-        info += f"\n\n[dim]具体步骤：[/dim]\n{steps}"
+def _render_schemes_overview(schemes: List[Scheme], console: Console) -> None:
+    """一次性展示所有方案"""
+    from rich.table import Table
+    from rich import box
 
-    console.print(
-        Panel(
-            info,
-            title=f"[bold]🔧 方案 ({index}/{total})[/bold]",
-            box=box.ROUNDED,
-            border_style="cyan",
-            padding=(1, 2),
+    table = Table(box=box.ROUNDED, border_style="cyan", title="📋 可选修复方案", title_style="bold cyan")
+    table.add_column("#", style="bold", width=4)
+    table.add_column("方案名称", style="bold cyan", no_wrap=True)
+    table.add_column("风险", justify="center")
+    table.add_column("改动", justify="center")
+    table.add_column("说明", style="white", max_width=60)
+
+    emojis = ["🔧", "💡", "⭐"]
+    for i, s in enumerate(schemes, 1):
+        emoji = emojis[i - 1] if i <= len(emojis) else "▫️"
+        table.add_row(
+            f"{emoji} {i}",
+            s.name,
+            f"{_risk_icon(s.risk)} {s.risk}",
+            f"{_scope_icon(s.scope)} {s.scope}",
+            s.description[:60] + ("…" if len(s.description) > 60 else ""),
         )
-    )
+
+    console.print()
+    console.print(table)
     console.print()
 
 
-def _ask_yes_no(console: Console, prompt: str = "是否按此方案执行？") -> bool:
-    """显示 Yes/No 选择器（方向键 + 回车）"""
-    console.print()  # 空行
+def interactive_loop(schemes: List[Scheme], console: Console) -> Optional[Scheme]:
+    """交互式方案选择
 
-    choice = questionary.select(
-        prompt,
-        choices=[
-            questionary.Choice(title="✅ 是的，就这个方案，执行吧", value=True),
-            questionary.Choice(title="❌ 不，换一个方案", value=False),
-        ],
+    一次性展示所有方案，让用户从 方案A/B/C + "其他" 中选择。
+    选"其他"则弹出输入框让用户自定义方案。
+    返回选中的 Scheme，全部放弃则返回 None。
+    """
+    if not schemes:
+        return None
+
+    _render_schemes_overview(schemes, console)
+
+    # 构建选项
+    choices = []
+    emojis = ["🔧", "💡", "⭐"]
+    for i, s in enumerate(schemes, 1):
+        emoji = emojis[i - 1] if i <= len(emojis) else "▫️"
+        risk_icon = _risk_icon(s.risk)
+        scope_icon = _scope_icon(s.scope)
+        label = f"{emoji} 方案{i}：{s.name}  {risk_icon} {s.risk}  {scope_icon} {s.scope}"
+        choices.append(questionary.Choice(title=label, value=("scheme", i - 1)))
+
+    choices.append(questionary.Separator("─" * 40))
+    choices.append(questionary.Choice(
+        title="✏️ 我来说一个方案（自定义输入）",
+        value=("custom", None),
+    ))
+    choices.append(questionary.Choice(
+        title="🚫 都不选，算了",
+        value=("none", None),
+    ))
+
+    console.print("[dim]按 ↑↓ 方向键选择，回车确认[/dim]")
+    result = questionary.select(
+        "请选择你想要的方案：",
+        choices=choices,
         qmark="🔧",
         use_indicator=True,
         pointer="→",
     ).ask()
 
-    return choice
+    if result is None:
+        return None
 
+    action, value = result
 
-def interactive_loop(schemes: List[Scheme], console: Console) -> Optional[Scheme]:
-    """交互式方案选择循环
+    if action == "scheme":
+        return schemes[value]
 
-    依次展示每个方案，让用户 Yes/No 选择。
-    Yes → 返回该方案
-    No  → 展示下一个方案
-    全部被拒 → 返回 None
-    """
-    total = len(schemes)
-    rejected_reasons = []
-
-    for i, scheme in enumerate(schemes, 1):
-        _render_scheme_card(scheme, i, total)
-
-        if i < total:
-            choice = _ask_yes_no(console, "是否按此方案执行？")
-        else:
-            choice = _ask_yes_no(console, "最后一个方案了，怎么样？")
-
-        if choice is True:
-            return scheme
-
-        # 记录拒绝原因
-        console.print("[dim]👀 能说一下为什么不想用这个方案吗？[/dim]")
-        reason = questionary.text(
-            "或者直接回车跳过：",
-            default="",
-            qmark="💬",
-        ).ask()
-        if reason:
-            rejected_reasons.append(f"{scheme.name}: {reason}")
-        console.print()
-
-    # 所有方案都被拒
-    if rejected_reasons:
-        console.rule("[bold yellow]📋 已尝试的方案总结")
-        for r in rejected_reasons:
-            console.print(f"  [dim]• {r}[/dim]")
-        console.print()
+    if action == "custom":
+        return _custom_scheme_input(console)
 
     return None
+
+
+def _custom_scheme_input(console: Console) -> Optional[Scheme]:
+    """用户自定义方案输入"""
+    console.print("\n[bold cyan]✏️ 请描述你的修复方案：[/bold cyan]")
+
+    name = questionary.text("方案名称（简短）：", qmark="📌").ask()
+    if not name:
+        return None
+
+    desc = questionary.text("方案描述：", qmark="📝").ask() or ""
+
+    risk = questionary.select(
+        "风险等级：",
+        choices=[
+            questionary.Choice(title="🟢 低（不影响其他功能）", value="低"),
+            questionary.Choice(title="🟡 中（可能影响周边功能）", value="中"),
+            questionary.Choice(title="🔴 高（架构级变更）", value="高"),
+        ],
+        qmark="📊",
+        default="低",
+    ).ask()
+
+    scope = questionary.select(
+        "改动范围：",
+        choices=[
+            questionary.Choice(title="📏 小（1-2 个文件）", value="小"),
+            questionary.Choice(title="📐 中（3-5 个文件）", value="中"),
+            questionary.Choice(title="🏗️ 大（5+ 文件或架构）", value="大"),
+        ],
+        qmark="📐",
+        default="小",
+    ).ask()
+
+    details_input = questionary.text(
+        "具体步骤（可选，逗号分隔）：",
+        qmark="📋",
+        default="",
+    ).ask()
+
+    details = [s.strip() for s in details_input.split(",")] if details_input else []
+
+    return Scheme(name=name, description=desc, risk=risk, scope=scope, details=details)
