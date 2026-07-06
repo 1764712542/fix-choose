@@ -5,7 +5,7 @@ from pathlib import Path
 
 import click
 
-from .chooser import interactive_loop, Scheme
+from .chooser import interactive_loop, Scheme, ChoiceResult
 from .config import load_config
 from .analyzer import analyze_with_ai
 from .executor import apply_scheme
@@ -101,16 +101,65 @@ def analyze(target, model, api_key, api_url, diff):
         console.print("[red]✗ AI 未能生成修复方案。[/red]")
         sys.exit(1)
 
-    # 交互式选择循环
-    chosen = interactive_loop(schemes, console)
+    # ========== 持续选择循环 ==========
+    rejected_context = []  # 记录已拒绝的方案，供 AI 重思考用
 
-    if chosen is None:
-        console.print("\n[yellow]🚫 没有选中的方案。再来一次？[/yellow]")
-        sys.exit(0)
+    while True:
+        choice = interactive_loop(schemes, console)
 
-    # 执行
-    console.rule("[bold green]✅ 开始执行修复")
-    apply_scheme(chosen, console)
+        if choice.action == "execute":
+            # 执行方案
+            console.rule("[bold green]✅ 开始执行修复")
+            apply_scheme(choice.scheme, console)
+            choice.scheme.done = True
+            console.print(f"\n[green]✓ 方案「{choice.scheme.name}」执行完成。可继续选择其他方案。[/green]\n")
+
+        elif choice.action == "custom":
+            # 执行自定义方案
+            console.rule("[bold green]✅ 执行自定义方案")
+            apply_scheme(choice.scheme, console)
+            choice.scheme.done = True
+            schemes.append(choice.scheme)
+            console.print(f"\n[green]✓ 自定义方案「{choice.scheme.name}」执行完成。[/green]\n")
+
+        elif choice.action == "rethink":
+            # 收集已拒绝/已执行的方案信息
+            done_names = [s.name for s in schemes if s.done]
+            pending = [s for s in schemes if not s.done and s.name not in done_names]
+            rejected_context.append(
+                f"已执行的方案: {', '.join(done_names) if done_names else '无'}"
+            )
+            if pending:
+                rejected_context.append(
+                    f"待选择的方案: {', '.join(s.name for s in pending)}"
+                )
+
+            console.print("\n[yellow]🤖 AI 正在重新思考其他方案...[/yellow]")
+            # 带着上下文重新分析
+            rethink_input = input_text
+            if rejected_context:
+                rethink_input += "\n\n## 之前尝试过的方案\n" + "\n".join(rejected_context)
+                rethink_input += "\n\n请提出与之前完全不同的新方案。"
+
+            result = analyze_with_ai(rethink_input, config)
+            if result and result.get("schemes"):
+                new_schemes = result["schemes"]
+                # 过滤掉与已有方案同名的
+                existing_names = {s.name for s in schemes}
+                fresh = [s for s in new_schemes if s.name not in existing_names]
+                if fresh:
+                    schemes.extend(fresh)
+                    console.print(f"\n[green]✨ AI 想出了 {len(fresh)} 个新方案！[/green]")
+                else:
+                    # 就算同名也加进去，只是标记一下
+                    schemes.extend(new_schemes)
+                    console.print(f"\n[green]✨ AI 重新分析了问题，生成了新方案。[/green]")
+            else:
+                console.print("[red]✗ AI 重思考失败，请重试。[/red]")
+
+        elif choice.action == "none":
+            console.print("\n[yellow]🔚 结束调试。[/yellow]")
+            sys.exit(0)
 
 
 @main.command()
@@ -161,30 +210,45 @@ def pick(scheme_a, scheme_b, scheme_c, json_output, extra_schemes):
     # 显示方案概览
     console.print(f"\n[cyan]共收到 {len(schemes)} 个方案，开始交互式选择...[/cyan]\n")
 
-    chosen = interactive_loop(schemes, console)
-
-    if chosen is None:
-        if json_output:
-            import json as _json
-            print(_json.dumps({"selected": None, "reason": "all_rejected"}, ensure_ascii=False))
-        else:
-            console.print("\n[yellow]🚫 没有选中的方案。再来一次？[/yellow]")
-        sys.exit(0)
+    choice = interactive_loop(schemes, console)
 
     if json_output:
         import json as _json
-        print(_json.dumps({
-            "selected": chosen.name,
-            "description": chosen.description,
-            "risk": chosen.risk,
-            "scope": chosen.scope,
-        }, ensure_ascii=False))
+        if choice.action == "execute":
+            print(_json.dumps({
+                "action": "execute",
+                "selected": choice.scheme.name,
+                "description": choice.scheme.description,
+                "risk": choice.scheme.risk,
+                "scope": choice.scheme.scope,
+            }, ensure_ascii=False))
+        elif choice.action == "custom":
+            print(_json.dumps({
+                "action": "custom",
+                "selected": choice.scheme.name,
+                "description": choice.scheme.description,
+                "risk": choice.scheme.risk,
+                "scope": choice.scheme.scope,
+            }, ensure_ascii=False))
+        elif choice.action == "rethink":
+            print(_json.dumps({"action": "rethink"}, ensure_ascii=False))
+        else:
+            print(_json.dumps({"action": "none"}, ensure_ascii=False))
     else:
-        console.rule("[bold green]✅ 选择结果")
-        print(f"[SELECTED] {chosen.name}")
-        console.print(f"\n选中的方案：[bold cyan]{chosen.name}[/bold cyan]")
-        console.print(f"方案描述：[white]{chosen.description}[/white]")
-        console.print(f"\n[dim]提示：将方案名告知 Claude Code 即可执行。[/dim]")
+        if choice.action == "execute":
+            console.rule("[bold green]✅ 选择结果")
+            print(f"[SELECTED] {choice.scheme.name}")
+            console.print(f"\n选中的方案：[bold cyan]{choice.scheme.name}[/bold cyan]")
+            console.print(f"方案描述：[white]{choice.scheme.description}[/white]")
+        elif choice.action == "custom":
+            console.rule("[bold green]✅ 自定义方案")
+            print(f"[CUSTOM] {choice.scheme.name}")
+        elif choice.action == "rethink":
+            print("[RETHINK]")
+            console.print("\n[yellow]🤖 让 AI 重新思考其他方案[/yellow]")
+        else:
+            print("[NONE]")
+            console.print("\n[yellow]🔚 放弃[/yellow]")
 
 
 @main.command()
