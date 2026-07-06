@@ -1,0 +1,27 @@
+[project]
+name = "fix-choose"
+version = "1.0.0"
+description = "交互式修复方案选择器 — 调试时带 Yes/No 按钮的方案选择工具"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [{name = "Mai-senpai"}]
+keywords = ["debug", "interactive", "cli", "tui", "fix"]
+
+dependencies = [
+    "rich>=13.0.0",
+    "questionary>=2.0.0",
+    "click>=8.0.0",
+    "httpx>=0.25.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+fix-choose = "fix_choose.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
